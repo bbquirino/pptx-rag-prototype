@@ -1,6 +1,6 @@
 'use client'
 import Head from 'next/head'
-import Chat from '../components/Chat';
+import Chat from '../components/Chat'
 
 export default function Home() {
   return (
@@ -11,5 +11,5 @@ export default function Home() {
       <h1 className="text-xl font-semibold mb-4">Alberta Economic Research Assistant</h1>
       <Chat />
     </div>
-  );
+  )
 }
