@@ -1,3 +1,3 @@
-# Approach
+# Approach to RAG Prototype — Alberta Perspectives
 
-Please outline your approach to completing the project. Include as few or as many details as you'd like to communicate what you've done.
+This document outlines the approach taken to design and build a functional Retrieval-Augmented Generation (RAG) prototype that allows querying Alberta economic insights from PowerPoint files...
