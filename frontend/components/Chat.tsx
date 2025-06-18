@@ -1,8 +1,7 @@
-// Trigger redeploy
-
+'use client'
 import { useState } from 'react';
 
-export function Chat() {
+export default function Chat() {
   const [messages, setMessages] = useState<string[]>([]);
   const [input, setInput] = useState('');
 
