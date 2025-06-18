@@ -1,3 +1,5 @@
+// Trigger redeploy – homepage test
+
 import Head from 'next/head';
 import { Chat } from '../components/Chat';
 
