@@ -1,58 +1,47 @@
-import { useState } from "react";
+import { useState } from 'react';
 
 export function Chat() {
-  const [query, setQuery] = useState("");
-  const [response, setResponse] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<string[]>([]);
+  const [input, setInput] = useState('');
 
-  const submitQuery = async () => {
-    setLoading(true);
-    setResponse(null);
-    setError(null);
+  const sendMessage = async () => {
+    if (!input.trim()) return;
+    const userMessage = input.trim();
+    setMessages([...messages, 'You: ' + userMessage]);
+    setInput('');
 
-    try {
-      const res = await fetch("/api/query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query })
-      });
-      if (!res.ok) throw new Error("Query failed");
-      const data = await res.json();
-      setResponse(data.answer);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
+    const res = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: userMessage })
+    });
+
+    const data = await res.json();
+    setMessages(prev => [...prev, 'Bot: ' + (data.answer || 'No response')]);
+  };
 
   return (
-    <div className="p-6 max-w-2xl mx-auto">
-      <h1 className="text-xl font-semibold mb-4">Ask a question</h1>
-      <textarea
-        rows={4}
-        className="w-full border rounded p-2"
-        placeholder="Ask me anything about Alberta’s economy..."
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-      <button
-        onClick={submitQuery}
-        disabled={loading || !query.trim()}
-        className="mt-3 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
-      >
-        {loading ? "Loading..." : "Submit"}
-      </button>
-
-      {response && (
-        <div className="mt-6 p-4 bg-white border rounded shadow-sm">
-          <h2 className="font-semibold mb-2">Answer:</h2>
-          <p className="whitespace-pre-wrap">{response}</p>
-        </div>
-      )}
-
-      {error && <p className="mt-4 text-red-600">Error: {error}</p>}
+    <div className="space-y-4">
+      <div className="bg-white p-4 rounded shadow h-64 overflow-y-auto">
+        {messages.map((msg, i) => (
+          <div key={i} className="text-sm mb-2">{msg}</div>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && sendMessage()}
+          placeholder="Ask something..."
+        />
+        <button
+          onClick={sendMessage}
+          className="bg-blue-600 text-white px-4 py-2 rounded text-sm"
+        >
+          Send
+        </button>
+      </div>
     </div>
   );
 }
