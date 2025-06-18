@@ -1,75 +1,79 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { Configuration, OpenAIApi } from 'openai';
 
-let supabase: any;
-if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-  const { createClient } = require('@supabase/supabase-js');
-  supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  );
-} else {
-  throw new Error("Supabase environment variables not found");
+// ⛑ Safely load env variables
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const openaiKey = process.env.OPENAI_API_KEY;
+
+if (!supabaseUrl || !supabaseKey || !openaiKey) {
+  console.error('Missing one or more required environment variables.');
 }
 
+const supabase = createClient(supabaseUrl!, supabaseKey!);
+const openai = new OpenAIApi(new Configuration({ apiKey: openaiKey! }));
+
 export async function POST(req: Request) {
-  const { query } = await req.json();
+  try {
+    const { query } = await req.json();
+    if (!query) {
+      console.warn('No query received.');
+      return NextResponse.json({ error: 'Missing query' }, { status: 400 });
+    }
 
-  if (!query) {
-    return NextResponse.json({ error: 'Missing query' }, { status: 400 });
-  }
+    console.log('Query:', query);
 
-  const embeddingResponse = await fetch("https://api.openai.com/v1/embeddings", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
+    // 🔍 Get OpenAI embedding for query
+    const embeddingResponse = await openai.createEmbedding({
+      model: 'text-embedding-ada-002',
       input: query,
-      model: "text-embedding-ada-002"
-    }),
-  });
+    });
 
-  const embeddingData = await embeddingResponse.json();
+    const [{ embedding }] = embeddingResponse.data.data;
+    console.log('Generated embedding:', embedding.slice(0, 5), '...');
 
-  if (!embeddingData?.data?.[0]?.embedding) {
-    return NextResponse.json({ error: 'Failed to get embedding from OpenAI' }, { status: 500 });
-  }
+    // 📡 Query Supabase using the pgvector extension
+    const { data: documents, error } = await supabase.rpc('match_documents', {
+      query_embedding: embedding,
+      match_threshold: 0.5,
+      match_count: 1,
+    });
 
-  const queryEmbedding = embeddingData.data[0].embedding;
+    if (error) {
+      console.error('Supabase match_documents error:', error.message);
+      return NextResponse.json({ error: 'Supabase error' }, { status: 500 });
+    }
 
-  const { data: matches, error } = await supabase.rpc('match_documents', {
-    query_embedding: queryEmbedding,
-    match_threshold: 0.78,
-    match_count: 5
-  });
+    if (!documents || documents.length === 0) {
+      console.log('No matching documents found.');
+      return NextResponse.json({ answer: 'No relevant information found.' });
+    }
 
-  if (error) {
-    return NextResponse.json({ error: 'Supabase match_documents RPC failed', details: error }, { status: 500 });
-  }
+    const context = documents[0].content;
+    console.log('Matched context:', context.slice(0, 100), '...');
 
-  const contextText = matches.map((doc: any) => doc.content).join('\n');
-
-  const chatResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-3.5-turbo",
+    // 💬 Ask OpenAI using retrieved context
+    const completion = await openai.createChatCompletion({
+      model: 'gpt-3.5-turbo',
       messages: [
-        { role: "system", content: "You are a helpful assistant for economic research." },
-        { role: "user", content: `Context: ${contextText}\n\nQuestion: ${query}` }
+        {
+          role: 'system',
+          content: 'You are an assistant answering economic questions about Alberta.',
+        },
+        {
+          role: 'user',
+          content: `Using this context, answer: ${query}\n\nContext:\n${context}`,
+        },
       ],
-    }),
-  });
+    });
 
-  const chatData = await chatResponse.json();
+    const answer = completion.data.choices[0].message?.content;
+    console.log('AI response:', answer);
 
-  if (!chatData?.choices?.[0]?.message?.content) {
-    return NextResponse.json({ error: 'Failed to get answer from OpenAI chat' }, { status: 500 });
+    return NextResponse.json({ answer });
+  } catch (err: any) {
+    console.error('Unexpected error:', err.message);
+    return NextResponse.json({ error: 'Unexpected server error' }, { status: 500 });
   }
-
-  return NextResponse.json({ answer: chatData.choices[0].message.content });
 }
