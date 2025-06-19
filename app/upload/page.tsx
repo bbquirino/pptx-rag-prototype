@@ -1,80 +1,57 @@
 'use client';
 
-import React, { useState } from 'react';
-import JSZip from 'jszip';
-import { parseStringPromise } from 'xml2js';
+import { useState } from 'react';
 
 export default function UploadPage() {
-  const [status, setStatus] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  const [error, setError] = useState<string | null>(null);
 
-  const extractTextFromPptx = async (file: File): Promise<string> => {
-    const zip = await JSZip.loadAsync(file);
-    const slideTexts: string[] = [];
-
-    const slideRegex = /^ppt\/slides\/slide\d+\.xml$/;
-
-    const slideFiles = Object.keys(zip.files).filter(name => slideRegex.test(name));
-
-    for (const filename of slideFiles) {
-      const xmlContent = await zip.files[filename].async('text');
-      const parsed = await parseStringPromise(xmlContent);
-      const texts = extractTextFromXml(parsed);
-      slideTexts.push(texts.join(' '));
-    }
-
-    return slideTexts.join('\n\n');
-  };
-
-  const extractTextFromXml = (parsed: any): string[] => {
-    const textElements: string[] = [];
-
-    const extract = (node: any) => {
-      if (typeof node === 'object') {
-        for (const key in node) {
-          if (key === 'a:t' && Array.isArray(node[key])) {
-            textElements.push(node[key].join(' '));
-          } else {
-            extract(node[key]);
-          }
-        }
-      }
-    };
-
-    extract(parsed);
-    return textElements;
-  };
-
-  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const handleUpload = async () => {
     if (!file) return;
 
-    setStatus('Processing...');
+    setStatus('uploading');
+    setError(null);
+
+    const formData = new FormData();
+    formData.append('file', file);
 
     try {
-      const text = await extractTextFromPptx(file);
-
-      const response = await fetch('/api/upload', {
+      const res = await fetch('/api/upload', {
         method: 'POST',
-        body: JSON.stringify({ filename: file.name, text }),
-        headers: { 'Content-Type': 'application/json' },
+        body: formData,
       });
 
-      if (!response.ok) {
-        throw new Error(`Upload failed with status ${response.status}`);
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData?.detail || 'Upload failed');
       }
 
-      setStatus('Upload and extraction successful!');
-    } catch (err) {
-      console.error(err);
-      setStatus('Error during upload or processing.');
+      setStatus('success');
+    } catch (err: any) {
+      console.error('Upload error:', err);
+      setStatus('error');
+      setError(err.message || 'Unknown error');
     }
   };
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-bold mb-4">Upload a PPTX File</h1>
-      <input type="file" accept=".pptx" onChange={handleUpload} />
-      <p className="mt-4 text-sm text-gray-700">{status}</p>
+    <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
+      <h1>Upload a PPTX File</h1>
+      <input
+        type="file"
+        accept=".pptx"
+        onChange={(e) => setFile(e.target.files?.[0] || null)}
+      />
+      <button onClick={handleUpload} style={{ marginLeft: '1rem' }}>
+        Upload
+      </button>
+
+      <div style={{ marginTop: '1rem' }}>
+        {status === 'uploading' && <p>Uploading...</p>}
+        {status === 'success' && <p style={{ color: 'green' }}>✅ Upload succeeded!</p>}
+        {status === 'error' && <p style={{ color: 'red' }}>❌ Upload failed: {error}</p>}
+      </div>
     </div>
   );
 }
