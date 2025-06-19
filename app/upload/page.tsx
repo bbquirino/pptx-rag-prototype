@@ -4,14 +4,13 @@ import { useState } from 'react';
 
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<null | { success: boolean; message: string }>(null);
 
   const handleUpload = async () => {
-    if (!file) return;
-
-    setStatus('uploading');
-    setError(null);
+    if (!file) {
+      setStatus({ success: false, message: 'No file selected.' });
+      return;
+    }
 
     const formData = new FormData();
     formData.append('file', file);
@@ -23,15 +22,15 @@ export default function UploadPage() {
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData?.detail || 'Upload failed');
+        const errorResult = await res.json().catch(() => ({ error: 'Unknown error' }));
+        setStatus({ success: false, message: `Upload failed: ${JSON.stringify(errorResult)}` });
+        return;
       }
 
-      setStatus('success');
-    } catch (err: any) {
-      console.error('Upload error:', err);
-      setStatus('error');
-      setError(err.message || 'Unknown error');
+      const result = await res.json();
+      setStatus({ success: true, message: 'Upload succeeded!' });
+    } catch (error) {
+      setStatus({ success: false, message: `Upload error: ${JSON.stringify(error)}` });
     }
   };
 
@@ -42,16 +41,15 @@ export default function UploadPage() {
         type="file"
         accept=".pptx"
         onChange={(e) => setFile(e.target.files?.[0] || null)}
+        style={{ marginRight: '1rem' }}
       />
-      <button onClick={handleUpload} style={{ marginLeft: '1rem' }}>
-        Upload
-      </button>
+      <button onClick={handleUpload}>Upload</button>
 
-      <div style={{ marginTop: '1rem' }}>
-        {status === 'uploading' && <p>Uploading...</p>}
-        {status === 'success' && <p style={{ color: 'green' }}>✅ Upload succeeded!</p>}
-        {status === 'error' && <p style={{ color: 'red' }}>❌ Upload failed: {error}</p>}
-      </div>
+      {status && (
+        <div style={{ marginTop: '1rem', color: status.success ? 'green' : 'red' }}>
+          {status.success ? '✅' : '❌'} {status.message}
+        </div>
+      )}
     </div>
   );
 }
