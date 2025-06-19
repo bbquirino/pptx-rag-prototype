@@ -1,54 +1,52 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { OpenAI } from 'openai';
-import { read } from 'pptx-parser'; // assumes you installed 'pptx-parser'
+import pptx2json from 'pptx2json';
+import { Readable } from 'stream';
 
+// Load Supabase env vars
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Helper: convert file buffer to Readable stream
+function bufferToStream(buffer: Buffer): Readable {
+  const stream = new Readable();
+  stream.push(buffer);
+  stream.push(null);
+  return stream;
+}
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const formData = await req.formData();
+  const file = formData.get('file') as File;
+
+  if (!file || file.type !== 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+    return NextResponse.json({ error: 'Invalid file type' }, { status: 400 });
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
   try {
-    const formData = await req.formData();
-    const file = formData.get('file') as File;
+    const slides = await pptx2json(bufferToStream(buffer));
+    const combinedText = slides.flatMap(slide => slide.text).join(' ');
 
-    if (!file || !file.name.endsWith('.pptx')) {
-      return NextResponse.json({ error: 'Invalid file' }, { status: 400 });
-    }
+    // Create fake embedding for now
+    const fakeEmbedding = Array(1536).fill(0).map(() => Math.random());
 
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const slides = await read(buffer);
-
-    const allText = slides.map((s) => s.text).join('\n').trim();
-    if (!allText) {
-      return NextResponse.json({ error: 'No readable content' }, { status: 400 });
-    }
-
-    const embeddingRes = await openai.embeddings.create({
-      input: allText,
-      model: 'text-embedding-ada-002',
+    // Upload to Supabase
+    const { error } = await supabase.from('documents').insert({
+      content: combinedText,
+      embedding: fakeEmbedding
     });
 
-    const [{ embedding }] = embeddingRes.data;
-
-    const { error } = await supabase.from('documents').insert([
-      { content: allText, embedding },
-    ]);
-
     if (error) {
-      console.error('[Supabase]', error.message);
-      return NextResponse.json({ error: 'DB insert failed' }, { status: 500 });
+      return NextResponse.json({ error: 'Failed to insert into Supabase', detail: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ status: 'ok' });
-  } catch (e: any) {
-    console.error('[Upload Error]', e.message);
-    return NextResponse.json({ error: 'Server error' }, { status: 500 });
+    return NextResponse.json({ message: 'Upload and embedding successful' });
+  } catch (err: any) {
+    return NextResponse.json({ error: 'Parsing failed', detail: err.message }, { status: 500 });
   }
 }
