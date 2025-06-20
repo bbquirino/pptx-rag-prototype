@@ -1,35 +1,39 @@
 import JSZip from "jszip";
 import { parseStringPromise } from "xml2js";
 
-export async function extractPPTText(buffer: Buffer): Promise<string> {
-  const zip = await JSZip.loadAsync(buffer);
-  const slideTextPromises: Promise<string>[] = [];
+export async function extractPPTText(arrayBuffer: ArrayBuffer): Promise<string> {
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  let fullText = "";
 
-  Object.keys(zip.files).forEach((filename) => {
-    if (filename.match(/^ppt\/slides\/slide\d+\.xml$/)) {
-      slideTextPromises.push(
-        zip.files[filename]
-          .async("string")
-          .then((xml) =>
-            parseStringPromise(xml).then((parsedXml) => {
-              const texts: string[] = [];
-              const findText = (obj: any) => {
-                if (typeof obj === "string") {
-                  texts.push(obj);
-                } else if (Array.isArray(obj)) {
-                  obj.forEach(findText);
-                } else if (typeof obj === "object" && obj !== null) {
-                  Object.values(obj).forEach(findText);
-                }
-              };
-              findText(parsedXml);
-              return texts.join(" ");
-            })
-          )
-      );
-    }
-  });
+  const slideRegex = /^ppt\/slides\/slide\d+\.xml$/;
 
-  const slideTexts = await Promise.all(slideTextPromises);
-  return slideTexts.join(" ").replace(/\s+/g, " ").trim();
+  const slideFiles = Object.keys(zip.files).filter((filename) =>
+    slideRegex.test(filename)
+  );
+
+  for (const filename of slideFiles) {
+    const file = zip.file(filename);
+    if (!file) continue;
+
+    const content = await file.async("string");
+    const parsedXml = await parseStringPromise(content);
+
+    const texts: string[] = [];
+    const extractText = (node: any) => {
+      if (typeof node === "object") {
+        for (const key in node) {
+          if (key === "a:t" && Array.isArray(node[key])) {
+            texts.push(...node[key]);
+          } else {
+            extractText(node[key]);
+          }
+        }
+      }
+    };
+
+    extractText(parsedXml);
+    fullText += texts.join(" ") + "\n";
+  }
+
+  return fullText.trim();
 }
