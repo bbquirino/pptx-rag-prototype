@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { OpenAI } from 'openai'
-import { extractPPTText } from '../../lib/extractPPTText' // ✅ fixed import
+import { extractPPTText } from '../../lib/extractPPTText'
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -22,12 +22,14 @@ export async function POST(req: Request) {
     }
 
     const arrayBuffer = await file.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
 
-    const rawTexts = await extractPPTText(buffer)
+    // ✅ FIX: Pass arrayBuffer directly
+    const rawTexts = await extractPPTText(arrayBuffer)
 
-    // Reduce context length to 2000 tokens-worth (safe estimate ~8000 chars total)
-    const cleanedTexts = rawTexts.map(text => text.replace(/\s+/g, ' ').trim()).filter(Boolean)
+    const cleanedTexts = rawTexts
+      .map(text => text.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+
     const limitedTexts = []
     let totalLength = 0
 
