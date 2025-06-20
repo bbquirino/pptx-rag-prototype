@@ -1,43 +1,52 @@
+import { NextResponse } from 'next/server';
 import { OpenAIEmbeddings } from 'langchain/embeddings/openai';
 import { SupabaseVectorStore } from 'langchain/vectorstores/supabase';
-import { createClient } from '@supabase/supabase-js';
 import { OpenAI } from 'langchain/llms/openai';
-import { NextResponse } from 'next/server';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+import { ConversationalRetrievalQAChain } from 'langchain/chains';
+import { createClient } from '@supabase/supabase-js';
+import { BufferMemory } from 'langchain/memory';
+import { ChatOpenAI } from 'langchain/chat_models/openai';
 
 export async function POST(req: Request) {
   try {
-    const { question } = await req.json();
+    const { query } = await req.json();
 
-    if (!question) {
-      return NextResponse.json({ answer: 'No question provided' }, { status: 400 });
-    }
+    const privateKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!privateKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set');
 
-    const embeddings = new OpenAIEmbeddings();
-
-    const vectorStore = await SupabaseVectorStore.fromExistingIndex(embeddings, {
-      client: supabase,
-      tableName: 'documents',
-      queryName: 'match_documents',
-    });
-
-    const results = await vectorStore.similaritySearch(question, 3);
-
-    const context = results.map((r) => r.pageContent).join('\n');
-
-    const model = new OpenAI({ temperature: 0.3 });
-
-    const answer = await model.call(
-      `Context:\n${context}\n\nQuestion: ${question}\nAnswer:`
+    const client = createClient(
+      process.env.SUPABASE_URL!,
+      privateKey
     );
 
-    return NextResponse.json({ answer });
-  } catch (error) {
-    console.error('Query API error:', error);
-    return NextResponse.json({ answer: 'Server error.' }, { status: 500 });
+    const vectorStore = await SupabaseVectorStore.fromExistingIndex(
+      new OpenAIEmbeddings(),
+      {
+        client,
+        tableName: 'documents',
+        queryName: 'match_documents',
+      }
+    );
+
+    const model = new ChatOpenAI({ temperature: 0 });
+    const chain = ConversationalRetrievalQAChain.fromLLM(
+      model,
+      vectorStore.asRetriever(),
+      {
+        memory: new BufferMemory({
+          memoryKey: 'chat_history',
+          returnMessages: true,
+        }),
+      }
+    );
+
+    const response = await chain.call({ question: query });
+    return NextResponse.json({ answer: response.text });
+  } catch (error: any) {
+    console.error('Error in query route:', error);
+    return NextResponse.json(
+      { error: error.message || 'Unknown error' },
+      { status: 500 }
+    );
   }
 }
