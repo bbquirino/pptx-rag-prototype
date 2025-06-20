@@ -1,6 +1,6 @@
-import { OpenAIEmbeddings } from 'langchain/embeddings';
+import { OpenAI } from 'langchain/llms/openai';
+import { OpenAIEmbeddings } from 'langchain/embeddings/openai';
 import { SupabaseVectorStore } from 'langchain/vectorstores/supabase';
-import { OpenAI } from 'langchain/llms';
 import { RunnableSequence } from 'langchain/schema/runnable';
 import { StringOutputParser } from 'langchain/schema/output_parser';
 import { createClient } from '@/lib/supabase';
