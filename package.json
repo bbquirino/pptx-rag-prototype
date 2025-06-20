@@ -10,7 +10,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.50.0",
     "jszip": "^3.10.1",
-    "langchain": "^0.3.29",
+    "langchain": "0.3.29",
     "next": "14.1.0",
     "openai": "^5.5.1",
     "react": "18.2.0",
