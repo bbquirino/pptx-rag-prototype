@@ -22,9 +22,10 @@ export async function POST(req: Request) {
     }
 
     const arrayBuffer = await file.arrayBuffer()
+    const rawText = await extractPPTText(arrayBuffer)
 
-    // ✅ FIX: Pass arrayBuffer directly
-    const rawTexts = await extractPPTText(arrayBuffer)
+    // ✅ Convert rawText (string) to array
+    const rawTexts = rawText.split('\n\n').filter(Boolean)
 
     const cleanedTexts = rawTexts
       .map(text => text.replace(/\s+/g, ' ').trim())
