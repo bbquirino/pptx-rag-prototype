@@ -1,97 +1,43 @@
-import { NextResponse } from 'next/server';
-import JSZip from 'jszip';
-import { parseStringPromise } from 'xml2js';
-import { createClient } from '@supabase/supabase-js';
-import { OpenAI } from 'openai';
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import { extractPPTXText } from "@/lib/extractPPTXText";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
-    const file = formData.get('file') as File;
+    const file = formData.get("file") as File;
 
-    if (!file) {
-      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    if (!file || !file.name.endsWith(".pptx")) {
+      return NextResponse.json({ error: "Only .pptx files are supported." }, { status: 400 });
     }
 
     const arrayBuffer = await file.arrayBuffer();
-    const zip = await JSZip.loadAsync(arrayBuffer);
-    const slideText: string[] = [];
+    const extractedText = await extractPPTXText(arrayBuffer);
 
-    const slideRegex = /ppt\/slides\/slide\d+\.xml/;
-    const slideFiles = Object.keys(zip.files).filter((fileName) => slideRegex.test(fileName));
+    const filename = file.name.replace(/\.pptx$/i, "").replace(/\s+/g, "-").toLowerCase();
+    const docId = `${filename}-${Date.now()}`;
 
-    for (const fileName of slideFiles) {
-      const fileData = await zip.files[fileName].async('string');
-      const parsedXml = await parseStringPromise(fileData);
-      const texts = extractTextFromXml(parsedXml);
-      slideText.push(...texts);
-    }
-
-    const fullText = slideText.join(' ');
-    const chunks = chunkText(fullText, 2000);
-
-    for (const chunk of chunks) {
-      const embeddingResponse = await openai.embeddings.create({
-        model: 'text-embedding-ada-002',
-        input: chunk,
-      });
-
-      const embedding = embeddingResponse.data[0].embedding;
-
-      await supabase.from('documents').insert({
-        content: chunk,
-        embedding,
-      });
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Upload error:', error);
-    return NextResponse.json(
-      { error: 'Upload failed', detail: (error as Error).message },
-      { status: 500 }
-    );
-  }
-}
-
-function extractTextFromXml(xml: any): string[] {
-  const texts: string[] = [];
-
-  function recursiveExtract(obj: any) {
-    if (typeof obj === 'string') {
-      texts.push(obj);
-    } else if (Array.isArray(obj)) {
-      for (const item of obj) {
-        recursiveExtract(item);
+    const { error: insertError } = await supabase.from("documents").insert([
+      {
+        id: docId,
+        name: file.name,
+        content: extractedText
       }
-    } else if (typeof obj === 'object') {
-      for (const key in obj) {
-        recursiveExtract(obj[key]);
-      }
+    ]);
+
+    if (insertError) {
+      console.error("Error saving to Supabase:", insertError.message);
+      return NextResponse.json({ error: "Failed to save to database." }, { status: 500 });
     }
+
+    return NextResponse.json({ success: true, id: docId });
+  } catch (err) {
+    console.error("Upload error:", err);
+    return NextResponse.json({ error: "Unexpected error occurred." }, { status: 500 });
   }
-
-  recursiveExtract(xml);
-  return texts;
-}
-
-function chunkText(text: string, maxTokens: number): string[] {
-  const words = text.split(/\s+/);
-  const approxTokensPerWord = 0.75;
-  const maxWords = Math.floor(maxTokens / approxTokensPerWord);
-
-  const chunks: string[] = [];
-  for (let i = 0; i < words.length; i += maxWords) {
-    const chunk = words.slice(i, i + maxWords).join(' ');
-    chunks.push(chunk);
-  }
-
-  return chunks;
 }
