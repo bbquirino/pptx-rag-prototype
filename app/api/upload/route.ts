@@ -1,104 +1,97 @@
-import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
-import JSZip from "jszip";
-import { parseStringPromise } from "xml2js";
+import { NextResponse } from 'next/server';
+import JSZip from 'jszip';
+import { parseStringPromise } from 'xml2js';
+import { createClient } from '@supabase/supabase-js';
+import { OpenAI } from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
-console.log("🔑 Using OpenAI key starting with:", process.env.OPENAI_API_KEY?.slice(0, 12));
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-export async function POST(req: NextRequest) {
-  const contentType = req.headers.get("content-type") || "";
-
-  if (!contentType.includes("multipart/form-data")) {
-    return NextResponse.json({ error: "Unsupported content type" }, { status: 400 });
-  }
-
+export async function POST(req: Request) {
   try {
     const formData = await req.formData();
-    const file = formData.get("file") as File;
+    const file = formData.get('file') as File;
 
     if (!file) {
-      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
     }
 
     const arrayBuffer = await file.arrayBuffer();
     const zip = await JSZip.loadAsync(arrayBuffer);
-    const slideTexts: string[] = [];
+    const slideText: string[] = [];
 
-    const slideFileNames = Object.keys(zip.files).filter((name) =>
-      name.match(/^ppt\/slides\/slide\d+\.xml$/)
-    );
+    const slideRegex = /ppt\/slides\/slide\d+\.xml/;
+    const slideFiles = Object.keys(zip.files).filter((fileName) => slideRegex.test(fileName));
 
-    for (const fileName of slideFileNames) {
-      const xmlContent = await zip.files[fileName].async("string");
-      const parsedXml = await parseStringPromise(xmlContent);
-      const texts = extractText(parsedXml);
-      slideTexts.push(...texts);
+    for (const fileName of slideFiles) {
+      const fileData = await zip.files[fileName].async('string');
+      const parsedXml = await parseStringPromise(fileData);
+      const texts = extractTextFromXml(parsedXml);
+      slideText.push(...texts);
     }
 
-    const combinedText = slideTexts.join(" ");
+    const fullText = slideText.join(' ');
+    const chunks = chunkText(fullText, 2000);
 
-    const embeddingResponse = await openai.embeddings.create({
-      model: "text-embedding-ada-002",
-      input: combinedText,
-    });
+    for (const chunk of chunks) {
+      const embeddingResponse = await openai.embeddings.create({
+        model: 'text-embedding-ada-002',
+        input: chunk,
+      });
 
-    const embedding = embeddingResponse.data[0]?.embedding;
+      const embedding = embeddingResponse.data[0].embedding;
 
-    if (!embedding) {
-      return NextResponse.json({ error: "Embedding failed" }, { status: 500 });
-    }
-
-    const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/documents`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apiKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY!}`,
-      },
-      body: JSON.stringify({
-        content: combinedText,
+      await supabase.from('documents').insert({
+        content: chunk,
         embedding,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorDetails = await response.text();
-      return NextResponse.json({ error: "Failed to insert into Supabase", detail: errorDetails }, { status: 500 });
+      });
     }
 
     return NextResponse.json({ success: true });
-  } catch (err: any) {
-    console.error("❌ Upload error:", err);
+  } catch (error) {
+    console.error('Upload error:', error);
     return NextResponse.json(
-      {
-        error: err?.message || "Unknown error",
-        detail: err?.response?.data || err?.stack || null,
-      },
+      { error: 'Upload failed', detail: (error as Error).message },
       { status: 500 }
     );
   }
 }
 
-function extractText(obj: any): string[] {
-  let texts: string[] = [];
+function extractTextFromXml(xml: any): string[] {
+  const texts: string[] = [];
 
-  if (typeof obj === "string") {
-    return [obj];
+  function recursiveExtract(obj: any) {
+    if (typeof obj === 'string') {
+      texts.push(obj);
+    } else if (Array.isArray(obj)) {
+      for (const item of obj) {
+        recursiveExtract(item);
+      }
+    } else if (typeof obj === 'object') {
+      for (const key in obj) {
+        recursiveExtract(obj[key]);
+      }
+    }
   }
 
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      texts.push(...extractText(item));
-    }
-  } else if (typeof obj === "object" && obj !== null) {
-    for (const key in obj) {
-      texts.push(...extractText(obj[key]));
-    }
-  }
-
+  recursiveExtract(xml);
   return texts;
+}
+
+function chunkText(text: string, maxTokens: number): string[] {
+  const words = text.split(/\s+/);
+  const approxTokensPerWord = 0.75;
+  const maxWords = Math.floor(maxTokens / approxTokensPerWord);
+
+  const chunks: string[] = [];
+  for (let i = 0; i < words.length; i += maxWords) {
+    const chunk = words.slice(i, i + maxWords).join(' ');
+    chunks.push(chunk);
+  }
+
+  return chunks;
 }
