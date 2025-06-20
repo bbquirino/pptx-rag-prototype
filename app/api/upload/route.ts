@@ -1,43 +1,61 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { extractPPTXText } from "@/lib/extractPPTXText";
+import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
+import { OpenAI } from 'openai'
+import extractPPTText from '../../lib/extractPPTText'
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+)
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   try {
-    const formData = await req.formData();
-    const file = formData.get("file") as File;
+    const formData = await req.formData()
+    const file = formData.get('file') as File
 
-    if (!file || !file.name.endsWith(".pptx")) {
-      return NextResponse.json({ error: "Only .pptx files are supported." }, { status: 400 });
+    if (!file) {
+      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 })
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const extractedText = await extractPPTXText(arrayBuffer);
+    const arrayBuffer = await file.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
 
-    const filename = file.name.replace(/\.pptx$/i, "").replace(/\s+/g, "-").toLowerCase();
-    const docId = `${filename}-${Date.now()}`;
+    const rawTexts = await extractPPTText(buffer)
 
-    const { error: insertError } = await supabase.from("documents").insert([
-      {
-        id: docId,
-        name: file.name,
-        content: extractedText
-      }
-    ]);
+    // Reduce context length to 2000 tokens-worth (safe estimate ~8000 chars total)
+    const cleanedTexts = rawTexts.map(text => text.replace(/\s+/g, ' ').trim()).filter(Boolean)
+    const limitedTexts = []
+    let totalLength = 0
 
-    if (insertError) {
-      console.error("Error saving to Supabase:", insertError.message);
-      return NextResponse.json({ error: "Failed to save to database." }, { status: 500 });
+    for (const text of cleanedTexts) {
+      if (totalLength + text.length > 8000) break
+      limitedTexts.push(text)
+      totalLength += text.length
     }
 
-    return NextResponse.json({ success: true, id: docId });
-  } catch (err) {
-    console.error("Upload error:", err);
-    return NextResponse.json({ error: "Unexpected error occurred." }, { status: 500 });
+    for (const text of limitedTexts) {
+      const embeddingRes = await openai.embeddings.create({
+        model: 'text-embedding-ada-002',
+        input: text,
+      })
+
+      const [{ embedding }] = embeddingRes.data
+
+      await supabase.from('documents').insert({
+        content: text,
+        embedding,
+      })
+    }
+
+    return NextResponse.json({ success: true })
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: 'Upload failed', detail: error.message || String(error) },
+      { status: 500 }
+    )
   }
 }
