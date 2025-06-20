@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { OpenAI } from 'openai'
-import extractPPTText from '../../lib/extractPPTText'
+import { extractPPTText } from '../../lib/extractPPTText' // ✅ fixed import
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
