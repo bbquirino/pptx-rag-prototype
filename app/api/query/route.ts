@@ -1,25 +1,18 @@
-import { NextResponse } from 'next/server';
 import { OpenAIEmbeddings } from 'langchain/embeddings/openai';
 import { SupabaseVectorStore } from 'langchain/vectorstores/supabase';
 import { OpenAI } from 'langchain/llms/openai';
-import { ConversationalRetrievalQAChain } from 'langchain/chains';
-import { createClient } from '@supabase/supabase-js';
-import { BufferMemory } from 'langchain/memory';
-import { ChatOpenAI } from 'langchain/chat_models/openai';
+import { RunnableSequence } from 'langchain/schema/runnable';
+import { StringOutputParser } from 'langchain/schema/output_parser';
+import { SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase';
 
-export async function POST(req: Request) {
+const client: SupabaseClient = createClient();
+
+export async function POST(req: Request): Promise<Response> {
   try {
     const { query } = await req.json();
 
-    const privateKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!privateKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set');
-
-    const client = createClient(
-      process.env.SUPABASE_URL!,
-      privateKey
-    );
-
-    const vectorStore = await SupabaseVectorStore.fromExistingIndex(
+    const vectorstore = await SupabaseVectorStore.fromExistingIndex(
       new OpenAIEmbeddings(),
       {
         client,
@@ -28,25 +21,29 @@ export async function POST(req: Request) {
       }
     );
 
-    const model = new ChatOpenAI({ temperature: 0 });
-    const chain = ConversationalRetrievalQAChain.fromLLM(
-      model,
-      vectorStore.asRetriever(),
-      {
-        memory: new BufferMemory({
-          memoryKey: 'chat_history',
-          returnMessages: true,
-        }),
-      }
-    );
+    const retriever = vectorstore.asRetriever();
 
-    const response = await chain.call({ question: query });
-    return NextResponse.json({ answer: response.text });
-  } catch (error: any) {
-    console.error('Error in query route:', error);
-    return NextResponse.json(
-      { error: error.message || 'Unknown error' },
-      { status: 500 }
-    );
+    const model = new OpenAI({
+      temperature: 0,
+      modelName: 'gpt-3.5-turbo',
+    });
+
+    const chain = RunnableSequence.from([
+      retriever,
+      (docs) => docs.map((doc) => doc.pageContent).join('\n'),
+      new StringOutputParser(),
+      model,
+    ]);
+
+    const answer = await chain.invoke(query);
+
+    return new Response(JSON.stringify({ answer }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    console.error(error);
+    return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
+      status: 500,
+    });
   }
 }
