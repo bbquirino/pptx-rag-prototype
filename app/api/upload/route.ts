@@ -1,103 +1,96 @@
-import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import JSZip from 'jszip';
-import { parseStringPromise } from 'xml2js';
+// app/api/upload/route.ts
 
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import OpenAI from "openai";
+import JSZip from "jszip";
+import { parseStringPromise } from "xml2js";
+
+// DEBUG: Confirm OpenAI key is injected
+console.log("ACTIVE OPENAI KEY", process.env.OPENAI_API_KEY);
+
+// Init Supabase
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-const openaiKey = process.env.OPENAI_API_KEY!;
+// Init OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
-export async function POST(req: Request) {
-  try {
-    const contentType = req.headers.get('content-type') || '';
-    if (!contentType.includes('multipart/form-data')) {
-      return NextResponse.json(
-        { error: 'Invalid content-type' },
-        { status: 400 }
-      );
-    }
-
-    const formData = await req.formData();
-    const file = formData.get('file') as File;
-
-    if (!file || file.type !== 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
-      return NextResponse.json({ error: 'Invalid PPTX file' }, { status: 400 });
-    }
-
-    const arrayBuffer = await file.arrayBuffer();
-    const zip = await JSZip.loadAsync(arrayBuffer);
-
-    const slideTexts: string[] = [];
-
-    const slideFiles = Object.keys(zip.files).filter(name =>
-      name.startsWith('ppt/slides/slide') && name.endsWith('.xml')
+export async function POST(req: NextRequest) {
+  const contentType = req.headers.get("content-type") || "";
+  if (!contentType.includes("multipart/form-data")) {
+    return NextResponse.json(
+      { error: "Invalid content type. Must be multipart/form-data." },
+      { status: 400 }
     );
+  }
 
-    for (const slideName of slideFiles) {
-      const xmlContent = await zip.files[slideName].async('string');
-      const parsed = await parseStringPromise(xmlContent);
-      const textRuns = parsed['p:sld']['p:cSld'][0]['p:spTree'][0]['p:sp'] || [];
-      for (const shape of textRuns) {
-        try {
-          const paragraphs =
-            shape['p:txBody']?.[0]['a:p'] || [];
-          for (const p of paragraphs) {
-            const runs = p['a:r'] || [];
-            for (const r of runs) {
-              const text = r['a:t']?.[0];
-              if (text) slideTexts.push(text);
+  try {
+    const formData = await req.formData();
+    const file = formData.get("file") as File;
+
+    if (!file || file.type !== "application/vnd.openxmlformats-officedocument.presentationml.presentation") {
+      return NextResponse.json({ error: "Invalid file type. Only PPTX allowed." }, { status: 400 });
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const zip = await JSZip.loadAsync(buffer);
+
+    let extractedText = "";
+
+    const slidePromises = Object.keys(zip.files)
+      .filter((filename) => filename.startsWith("ppt/slides/slide") && filename.endsWith(".xml"))
+      .map(async (filename) => {
+        const xml = await zip.files[filename].async("string");
+        const parsed = await parseStringPromise(xml);
+        const texts: string[] = [];
+
+        function extractText(node: any) {
+          if (typeof node === "object") {
+            for (const key in node) {
+              if (key === "a:t") {
+                if (Array.isArray(node[key])) {
+                  texts.push(...node[key]);
+                }
+              } else {
+                extractText(node[key]);
+              }
             }
           }
-        } catch {}
-      }
-    }
+        }
 
-    const combinedText = slideTexts.join(' ').trim();
+        extractText(parsed);
+        return texts.join(" ");
+      });
 
-    if (!combinedText) {
-      return NextResponse.json({ error: 'No text extracted from PPTX' }, { status: 400 });
-    }
+    const slideTexts = await Promise.all(slidePromises);
+    extractedText = slideTexts.join(" ");
 
-    const embeddingResponse = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${openaiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        input: combinedText,
-        model: 'text-embedding-ada-002'
-      })
+    // Embed content
+    const embedding = await openai.embeddings.create({
+      model: "text-embedding-ada-002",
+      input: extractedText,
     });
 
-    if (!embeddingResponse.ok) {
-      const err = await embeddingResponse.json();
-      console.error('OpenAI error:', err);
-      return NextResponse.json({ error: 'Embedding failed', detail: err }, { status: 500 });
-    }
-
-    const { data } = await embeddingResponse.json();
-    const embedding = data[0].embedding;
-
-    const { error: dbError } = await supabase.from('documents').insert([
+    const { error } = await supabase.from("documents").insert([
       {
-        content: combinedText,
-        embedding
-      }
+        content: extractedText,
+        embedding: embedding.data[0].embedding,
+      },
     ]);
 
-    if (dbError) {
-      console.error('Supabase insert error:', dbError);
-      return NextResponse.json({ error: 'Failed to save document', detail: dbError }, { status: 500 });
+    if (error) {
+      console.error("Supabase insert error:", error);
+      return NextResponse.json({ error: "Database insert failed", detail: error }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true }, { status: 200 });
-
-  } catch (err) {
-    console.error('Unexpected upload error:', err);
-    return NextResponse.json({ error: 'Unexpected server error', detail: String(err) }, { status: 500 });
+    return NextResponse.json({ status: "success" }, { status: 200 });
+  } catch (err: any) {
+    console.error("Upload error:", err);
+    return NextResponse.json({ error: "Embedding failed", detail: err }, { status: 500 });
   }
 }
