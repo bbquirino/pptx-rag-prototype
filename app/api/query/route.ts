@@ -1,10 +1,10 @@
-import { OpenAIEmbeddings } from 'langchain/embeddings/openai';
+import { OpenAIEmbeddings } from 'langchain/embeddings';
 import { SupabaseVectorStore } from 'langchain/vectorstores/supabase';
-import { OpenAI } from 'langchain/llms/openai';
+import { OpenAI } from 'langchain/llms';
 import { RunnableSequence } from 'langchain/schema/runnable';
 import { StringOutputParser } from 'langchain/schema/output_parser';
-import { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase';
+import { SupabaseClient } from '@supabase/supabase-js';
 
 const client: SupabaseClient = createClient();
 
@@ -30,7 +30,7 @@ export async function POST(req: Request): Promise<Response> {
 
     const chain = RunnableSequence.from([
       retriever,
-      (docs) => docs.map((doc) => doc.pageContent).join('\n'),
+      (docs) => docs.map((doc) => doc.pageContent).join('\n\n'),
       new StringOutputParser(),
       model,
     ]);
@@ -41,7 +41,7 @@ export async function POST(req: Request): Promise<Response> {
       headers: { 'Content-Type': 'application/json' },
     });
   } catch (error) {
-    console.error(error);
+    console.error('[QUERY ERROR]', error);
     return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
       status: 500,
     });
