@@ -18,9 +18,8 @@
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
-    "@types/node": "^18.0.1",
+    "typescript": "^5.3.3",
     "@types/react": "^18.2.78",
-    "typescript": "^5.3.3"
-  },
-  "comment": "Corrected devDependencies to valid published versions"
+    "@types/node": "^18.0.1"
+  }
 }
